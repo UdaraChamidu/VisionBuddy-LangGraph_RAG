@@ -12,27 +12,25 @@ from langchain_community.vectorstores import Chroma
 from langchain_core.tools import tool
 from langchain.tools import BaseTool
 from duckduckgo_search import DDGS
-
+import requests
 
 load_dotenv()  
 
 llm = ChatOpenAI(
-    model="gpt-4o", temperature = 0) # I want to minimize hallucination - temperature = 0 makes the model output more deterministic 
+    model="gpt-4o", temperature=0
+)  # minimize hallucination
 
-# Our Embedding Model - has to also be compatible with the LLM
 embeddings = OpenAIEmbeddings(
     model="text-embedding-3-small",
 )
 
 pdf_path = "Kanski’s clinical ophthalmology _ a systematic approach.pdf"
 
-# Safety measure I have put for debugging purposes :)
 if not os.path.exists(pdf_path):
     raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
-pdf_loader = PyPDFLoader(pdf_path) # This loads the PDF
+pdf_loader = PyPDFLoader(pdf_path)
 
-# Checks if the PDF is there
 try:
     pages = pdf_loader.load()
     print(f"PDF has been loaded and has {len(pages)} pages")
@@ -40,53 +38,58 @@ except Exception as e:
     print(f"Error loading PDF: {e}")
     raise
 
-# Chunking Process
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=500,
     chunk_overlap=100
 )
 
-pages_split = text_splitter.split_documents(pages) # We now apply this to our pages
+pages_split = text_splitter.split_documents(pages)
 
-# vector store 
-persist_directory = r"C:\LangGraph\FreeCodeCamp projects\Agents" 
+persist_directory = os.path.join("C:\\VisionBuddy-LangGraph_RAG", "chroma_db")
 collection_name = "vectorstore"
 
-# If our collection does not exist in the directory, we create using the os command
 if not os.path.exists(persist_directory):
     os.makedirs(persist_directory)
 
-try:
-    # Here, we actually create the chroma database using our embeddigns model
+# --- VECTORSTORE CREATION / LOADING ---
+
+def vectorstore_exists(persist_dir: str) -> bool:
+    # This checks if any file/folder exists in the persist_directory (better than just os.listdir)
+    expected_files = ["chroma-collections.parquet", "chroma-embeddings.parquet", "index"]
+    return all(os.path.exists(os.path.join(persist_dir, f)) for f in expected_files)
+
+if vectorstore_exists(persist_directory):
+    print("Loading existing Chroma vector store...")
+    vectorstore = Chroma(
+        persist_directory=persist_directory,
+        collection_name=collection_name,
+        embedding_function=embeddings
+    )
+else:
+    print("Creating new Chroma vector store from documents...")
     vectorstore = Chroma.from_documents(
         documents=pages_split,
         embedding=embeddings,
         persist_directory=persist_directory,
         collection_name=collection_name
     )
-    print(f"Created ChromaDB vector store!")
-    
-except Exception as e:
-    print(f"Error setting up ChromaDB: {str(e)}")
-    raise
+    print("Saving vector store to disk...")
+    vectorstore.persist()
 
-# Now we create our retriever 
+print("Vector store ready!")
+
 retriever = vectorstore.as_retriever(
     search_type="similarity",
-    search_kwargs={"k": 5} # K is the amount of chunks to return
+    search_kwargs={"k": 5}
 )
 
-# retriever tool
 @tool
 def retriever_tool(query: str) -> str:
     """
     This tool searches and returns the information from the clinical ophthalmology textbook.
-
     """
-
     docs = retriever.invoke(query)
 
-    # if data not found in vector store
     if not docs:
         return "I found no relevant information in the Eye Disease document."
     
@@ -96,22 +99,23 @@ def retriever_tool(query: str) -> str:
     
     return "\n\n".join(results)
 
-# search tool
 @tool
 def search_tool(query: str) -> str:
     """
     Searches the internet for the user's query using DuckDuckGo.
-    Returns a text summary of the top results.
+    Returns a detailed summary of the top results.
     """
     try:
         with DDGS() as ddgs:
-            results = ddgs.text(query, max_results=5)
+            results = ddgs.text(query, max_results=8)
             if not results:
                 return "No internet search results found."
 
             summaries = []
             for i, res in enumerate(results, 1):
-                summaries.append(f"{i}. {res['title']}\n{res['body']}\nURL: {res['href']}")
+                summaries.append(
+                    f"Result {i}:\nTitle: {res['title']}\nSnippet: {res['body']}\nURL: {res['href']}"
+                )
             return "\n\n".join(summaries)
     except Exception as e:
         return f"Error during DuckDuckGo search: {str(e)}"
@@ -124,7 +128,6 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
 def should_continue(state: AgentState):
-    """Check if the last message contains tool calls."""
     result = state['messages'][-1]
     return hasattr(result, 'tool_calls') and len(result.tool_calls) > 0
 
@@ -134,37 +137,29 @@ You are an intelligent AI assistant who answers questions about clinical ophthal
   If you do, answer with: "According to the book, ..." and cite the PDF text.
 - If the PDF has no relevant info, call the internet search tool and then answer with: "From the internet, ..." and cite the search results.
 Always call the appropriate tool when needed.
-""" 
+"""
 
-# what is this ???
-tools_dict = {our_tool.name: our_tool for our_tool in tools} # Creating a dictionary of our tools
+tools_dict = {our_tool.name: our_tool for our_tool in tools}
 
-# LLM Agent (Agent 1)
 def call_llm(state: AgentState) -> AgentState:
-    """Function to call the LLM with the current state."""
     messages = list(state['messages'])
     messages = [SystemMessage(content=system_prompt)] + messages
     message = llm.invoke(messages)
-    return {'messages': [message]}
-
-# Retriever Agent (Agent 2)
+    return {'messages': [message]}  
+   
 def take_action(state: AgentState) -> AgentState:
-    """Execute tool calls from the LLM's response."""
-
     tool_calls = state['messages'][-1].tool_calls
     results = []
     for t in tool_calls:
         print(f"Calling Tool: {t['name']} with query: {t['args'].get('query', 'No query provided')}")
         
-        if not t['name'] in tools_dict: # Checks if a valid tool is present
+        if not t['name'] in tools_dict:
             print(f"\nTool: {t['name']} does not exist.")
             result = "Incorrect Tool Name, Please Retry and Select tool from List of Available tools."
-        
         else:
             result = tools_dict[t['name']].invoke(t['args'].get('query', ''))
             print(f"Result length: {len(str(result))}")
             
-        # Appends the Tool Message
         results.append(ToolMessage(tool_call_id=t['id'], name=t['name'], content=str(result)))
 
     print("Tools Execution Complete. Back to the model!")
@@ -184,7 +179,6 @@ graph.set_entry_point("llm")
 
 rag_agent = graph.compile()
 
-# Q and A continuous...
 def running_agent():
     print("\n=== RAG AGENT===")
     
@@ -193,7 +187,7 @@ def running_agent():
         if user_input.lower() in ['exit', 'quit']:
             break
             
-        messages = [HumanMessage(content=user_input)] # converts back to a HumanMessage type
+        messages = [HumanMessage(content=user_input)]
 
         result = rag_agent.invoke({"messages": messages})
         
