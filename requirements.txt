@@ -1,0 +1,28 @@
+# Core environment
+langchain
+langgraph
+openai
+tiktoken
+python-dotenv
+
+# For PDF loading
+langchain-community
+PyMuPDF  # required for PyPDFLoader
+pypdf
+
+# For embeddings and LLM
+langchain-openai
+
+# Vector store
+chromadb
+
+# Text splitting
+nltk  # Optional, used by RecursiveCharacterTextSplitter
+
+# Utilities
+pydantic  # LangChain compatibility
+
+# tools
+duckduckgo-search
+google-search-results
+
