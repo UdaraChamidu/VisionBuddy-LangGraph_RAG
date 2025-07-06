@@ -6,7 +6,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, Ba
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Annotated, Sequence
 from operator import add as add_messages
-#from vector_store import load_or_create_vectorstore
+# from vector_store import load_or_create_vectorstore
 from tools_setup import create_tools
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
@@ -42,11 +42,29 @@ def should_continue(state: AgentState):
     return hasattr(result, 'tool_calls') and len(result.tool_calls) > 0
 
 system_prompt = """
-You are an AI assistant for clinical ophthalmology.
-- Use retriever_tool to check the PDF first.
-- If not found, use search_tool.
-Always cite your source.
+You are an intelligent AI assistant specialized in clinical ophthalmology. Your primary goal is to assist users with questions about eye diseases using trusted sources like textbooks, medical news, and health APIs.
+
+Use the following tools when needed:
+
+1. 🧾 **retriever_tool** – Search the PDF textbook on ophthalmology for accurate and authoritative answers. If relevant info is found, respond like:  
+   "According to the book, ..." and include the source text.
+
+2. 🌐 **search_tool** – Search the internet using DuckDuckGo if the PDF lacks useful content. Use this for general questions or trending topics.  
+   Start your response with: "From the internet, ..."
+
+3. 📰 **medical_news_tool** – Use this to get recent medical news about diseases, treatments, technologies, or research updates.  
+   Use when the user asks for "latest news", "updates", or "new treatments".
+
+4. 🗓️ **today_tool** – Provide today's date when the user asks about the current day, schedules, or timing of symptoms.
+
+5. 🌍 **who_disease_info** – Fetch basic global health info on known diseases from WHO. Use this for general info like symptoms, prevalence, or risk factors.
+
+❗ Always try to use the `retriever_tool` first when the topic clearly relates to the eye diseases covered in the textbook.
+❗ If no relevant information is found, move to other tools like news, search, or WHO info.
+
+Be concise, accurate, and always cite your source tool.
 """
+
 
 def call_llm(state: AgentState) -> AgentState:
     messages = [SystemMessage(content=system_prompt)] + list(state['messages'])
@@ -107,3 +125,5 @@ def running_agent():
 
 if __name__ == "__main__":
     running_agent()
+
+
