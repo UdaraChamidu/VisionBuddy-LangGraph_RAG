@@ -180,18 +180,36 @@ graph.set_entry_point("llm")
 rag_agent = graph.compile()
 
 def running_agent():
-    print("\n=== RAG AGENT===")
+    print("\n=== RAG AGENT with Memory ===")
+    
+    messages = []  # persistent message history
     
     while True:
-        user_input = input("\nWhat is your question: ")
+        user_input = input("\nYou: ")
+        
         if user_input.lower() in ['exit', 'quit']:
+            print("\n👋 Exiting conversation. See you!")
             break
-            
-        messages = [HumanMessage(content=user_input)]
+
+        if user_input.lower() == "/save":
+            with open("chat_history.txt", "w", encoding="utf-8") as f:
+                for msg in messages:
+                    role = "You" if isinstance(msg, HumanMessage) else "AI"
+                    f.write(f"{role}: {msg.content}\n")
+            print("💾 Chat saved to chat_history.txt")
+            continue  # go to next input without running LLM
+
+        messages.append(HumanMessage(content=user_input))  # add user input
 
         result = rag_agent.invoke({"messages": messages})
-        
-        print("\n=== ANSWER ===")
-        print(result['messages'][-1].content)
+
+        ai_reply = result['messages'][-1]
+        print(f"\nAI: {ai_reply.content}")
+
+        messages.append(ai_reply)  # add AI reply
 
 running_agent()
+
+
+
+

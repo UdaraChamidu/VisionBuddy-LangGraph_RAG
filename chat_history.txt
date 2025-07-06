@@ -1,0 +1,4 @@
+You: hi
+AI: Hello! How can I assist you today?
+You: save
+AI: Could you please provide more details or clarify what you mean by "save"? Are you looking for information on a specific topic or need assistance with something related to clinical ophthalmology?
