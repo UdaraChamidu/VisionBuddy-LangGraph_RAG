@@ -6,10 +6,10 @@ from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, Ba
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Annotated, Sequence
 from operator import add as add_messages
-# from vector_store import load_or_create_vectorstore
 from tools_setup import create_tools
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
+from langchain_core.messages import ToolMessage
 import os
 
 load_dotenv()
@@ -31,7 +31,7 @@ retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k
 llm = ChatOpenAI(model="gpt-4o", temperature=0)
 tools = create_tools(retriever)
 llm = llm.bind_tools(tools)
-tools_dict = {tool.name: tool for tool in tools} 
+tools_dict = {tool.name: tool for tool in tools}
 
 # Agent state
 class AgentState(TypedDict):
@@ -46,7 +46,7 @@ You are an intelligent AI assistant specialized in clinical ophthalmology. Your 
 
 Use the following tools when needed:
 
-1. 🧾 **retriever_tool** – Search the PDF textbook on ophthalmology for accurate and authoritative answers. If relevant info is found, respond like:  
+1. 📟 **retriever_tool** – Search the PDF textbook on ophthalmology for accurate and authoritative answers. If relevant info is found, respond like:  
    "According to the book, ..." and include the source text.
 
 2. 🌐 **search_tool** – Search the internet using DuckDuckGo if the PDF lacks useful content. Use this for general questions or trending topics.  
@@ -55,7 +55,7 @@ Use the following tools when needed:
 3. 📰 **medical_news_tool** – Use this to get recent medical news about diseases, treatments, technologies, or research updates.  
    Use when the user asks for "latest news", "updates", or "new treatments".
 
-4. 🗓️ **today_tool** – Provide today's date when the user asks about the current day, schedules, or timing of symptoms.
+4. 🍛 **today_tool** – Provide today's date when the user asks about the current day, schedules, or timing of symptoms.
 
 5. 🌍 **who_disease_info** – Fetch basic global health info on known diseases from WHO. Use this for general info like symptoms, prevalence, or risk factors.
 
@@ -65,27 +65,42 @@ Use the following tools when needed:
 Be concise, accurate, and always cite your source tool.
 """
 
-
 def call_llm(state: AgentState) -> AgentState:
     messages = [SystemMessage(content=system_prompt)] + list(state['messages'])
     response = llm.invoke(messages)
-    return {'messages': [response]}
+    return {'messages': state['messages'] + [response]}
 
 def take_action(state: AgentState) -> AgentState:
-    tool_calls = state['messages'][-1].tool_calls
+    tool_calls = state["messages"][-1].tool_calls
     results = []
 
     for t in tool_calls:
-        name = t['name']
-        args = t['args'].get('query', '')
-        print(f"⚙️ Calling tool: {name} with query: {args}")
-        if name in tools_dict:
-            result = tools_dict[name].invoke(args)
-        else:
-            result = "Tool not found."
-        results.append(ToolMessage(tool_call_id=t['id'], name=name, content=str(result)))
+        name = t["name"]
+        args = t.get("args", {})  # args are already parsed by OpenAI
 
-    return {'messages': results}
+        print(f"⚙️ Calling tool: {name} with args: {args}")
+
+        # Use whatever key your tools expect
+        arg = args.get("query") or args.get("topic") or args.get("disease") or ""
+
+        # Actually call the tool
+        if name in tools_dict:
+            tool_result = tools_dict[name].invoke(arg)
+        else:
+            tool_result = "Tool not found."
+
+        # ✅ Create ToolMessage with correct tool_call_id
+        results.append(
+            ToolMessage(
+                tool_call_id=t["id"],
+                content=str(tool_result)
+            )
+        )
+
+    # ✅ Append tool responses to messages
+    return {
+        "messages": state["messages"] + results
+    }
 
 # Graph
 graph = StateGraph(AgentState)
@@ -114,16 +129,25 @@ def running_agent():
                 for m in messages:
                     role = "You" if isinstance(m, HumanMessage) else "AI"
                     f.write(f"{role}: {m.content}\n")
-            print("💾 Chat saved to chat_history.txt")
+            print("📎 Chat saved to chat_history.txt")
             continue
 
         messages.append(HumanMessage(content=user_input))
-        result = rag_agent.invoke({"messages": messages})
-        reply = result['messages'][-1]
-        print(f"\nAI: {reply.content}")
-        messages.append(reply)
+
+        # Step 1: Call LLM
+        result = call_llm({"messages": messages})
+        messages = result["messages"]
+
+        # Step 2: Check for tool calls
+        while should_continue({"messages": messages}):
+            result = take_action({"messages": messages})
+            messages = result["messages"]
+            result = call_llm({"messages": messages})
+            messages = result["messages"]
+
+        # Step 3: Print final LLM response
+        final_reply = messages[-1]
+        print(f"\nAI: {final_reply.content}")
 
 if __name__ == "__main__":
     running_agent()
-
-
